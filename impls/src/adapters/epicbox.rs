@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::config::EpicboxConfig;
-use crate::epicbox::protocol::{ProtocolRequest, ProtocolRequestV2, ProtocolResponse, ProtocolResponseV2};
+use crate::epicbox::protocol::{
+	ProtocolRequest, ProtocolRequestV2, ProtocolResponse, ProtocolResponseV2,
+};
 use crate::keychain::Keychain;
 use crate::libwallet::crypto::{sign_challenge, Hex};
 use crate::libwallet::message::EncryptedMessage;
@@ -46,19 +48,19 @@ use epic_wallet_util::epic_core::core::amount_to_hr_string;
 use std::net::TcpStream;
 use std::string::ToString;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::thread::spawn;
 use std::thread::sleep;
+use std::thread::spawn;
 use tungstenite::connect;
 use tungstenite::Error as tungsteniteError;
 use tungstenite::{protocol::WebSocket, stream::MaybeTlsStream};
 use tungstenite::{Error as ErrorTungstenite, Message};
 
-
 // for 2.0.0 protocol
+
+use std::time::Instant;
 
 //use tungstenite::stream::MaybeTlsStream::Plain;
 //use tungstenite::stream::MaybeTlsStream::NativeTls;
-
 
 // use timer;
 //use std::time::Duration;
@@ -678,6 +680,8 @@ impl EpicboxBroker {
 		}
 		let duration = std::time::Duration::from_secs(seconds);
 
+		let durationV2 = std::time::Duration::from_secs(1);
+
 		let mut client = EpicboxClient {
 			sender,
 			handler: handler.clone(),
@@ -694,53 +698,50 @@ impl EpicboxBroker {
 
 		let mut last_message_id_V2 = String::from("");
 
-//		let mut justsendsubscribe = false;
-//		let mut justsendgetversion = false;
+		//		let mut justsendsubscribe = false;
+		//		let mut justsendgetversion = false;
 
-//		let repeatrequestV2 = ProtocolRequestV2::Subscribe {
-//				address: client.address.public_key.to_string(),
-//				ver: ver.to_string(),
-//				signature: signature.clone(),
-//			};
-
+		//		let repeatrequestV2 = ProtocolRequestV2::Subscribe {
+		//				address: client.address.public_key.to_string(),
+		//				ver: ver.to_string(),
+		//				signature: signature.clone(),
+		//			};
 
 		//let requestGetVersion = ProtocolRequestV2::GetVersion {};
 
-        //justsendgetversion = true;
-
+		//justsendgetversion = true;
 
 		//client
 		//	.sendV2(&requestGetVersion)
 		//	.expect("Could not send Subscribe request!");
 
-		
-		
-			let request = ProtocolRequestV2::Subscribe {
-				address: client.address.public_key.to_string(),
-				ver: ver.to_string(),
-				signature,
-			};
+		let request = ProtocolRequestV2::Subscribe {
+			address: client.address.public_key.to_string(),
+			ver: ver.to_string(),
+			signature,
+		};
 
-	    	
-			client
-				.sendV2(&request)
-				.expect("Could not send Subscribe request!");
+		client
+			.sendV2(&request)
+			.expect("Could not send Subscribe request!");
 
+		let mut tester_challenge = 0;
+
+		let mut fornow = 0;
+
+		let now = Instant::now();
 
 		let res = loop {
+			// warn!("Next loop");
+			/*	  	client
+			.challenge_send()
+			.map_err(|_| {
+				error!("Error attempting to subscribe!");
+			})
+			.unwrap(); */
 
-			warn!("Next loop");
-	/*	  	client
-				.challenge_send()
-				.map_err(|_| {
-					error!("Error attempting to subscribe!");
-				})
-				.unwrap(); */	
-
-		  let err = client.sender.lock().read_message();
-		  let mut new_challenge = false;
-
-		  
+			let err = client.sender.lock().read_message();
+			let mut new_challenge = false;
 
 			match err {
 				Err(e) => {
@@ -757,35 +758,55 @@ impl EpicboxBroker {
 				}
 				Ok(message) => match message {
 					Message::Text(_) | Message::Binary(_) => {
-						let response =
-							match serde_json::from_str::<ProtocolResponseV2>(&message.to_string()) {
-								Ok(x) => x,
-								Err(_) => {
-									error!("Could not pharse {}", message.to_string());
+						let response = match serde_json::from_str::<ProtocolResponseV2>(
+							&message.to_string(),
+						) {
+							Ok(x) => x,
+							Err(_) => {
+								error!("Could not pharse {}", message.to_string());
 
-									return Ok(());
-								}
-							};
+								return Ok(());
+							}
+						};
 
-						warn!(">>>{}", response);	
+						//warn!(">>>{}", &message.to_string());
 
 						match response {
 							ProtocolResponseV2::Challenge { str } => {
 								debug!(">>> Challenge response received ({})", str.clone());
-								error!(">>> Challenge response received ({})", str.clone());
+								//warn!(">>> Challenge response received ({})", str.clone());
+								tester_challenge = tester_challenge + 1;
+								fornow = fornow + 1;
 								client.challenge = Some(str.clone());
-								/*client
-									.challenge_send()
-									.map_err(|_| {
-										error!("Error attempting to subscribe!");
-									})
-									.unwrap();*/
+
+								if tester_challenge == 1 {
+									// warn!(">>> Send Challenge message to fastepic epicbox");
+									//println!("Tester challenge{:?}", tester_challenge);
+									client
+										.challenge_send()
+										.map_err(|_| {
+											error!("Error attempting to subscribe!");
+										})
+										.unwrap();
+
+								// std::thread::sleep(durationV2);
+								} else {
+									//println!("Tester challenge {:?} and set to zero", tester_challenge);
+									tester_challenge = 0;
+								}
+
+								if fornow >= 2 {
+									fornow = 0;
+									let elapsed_time = now.elapsed();
+									warn!("Still receive data from fastepicbox after {:?} without disconection.", elapsed_time);
+								}
 
 								//if !first_run {
 								//	error!("Start sleeping");
 								//	std::thread::sleep(duration);
 								//} else {
-									new_challenge = true;
+								// prevent send again // old code part
+								new_challenge = false;
 								//}
 							}
 							ProtocolResponseV2::Slate {
@@ -796,10 +817,7 @@ impl EpicboxBroker {
 								ver,
 								epicboxmsgid,
 							} => {
-
-
-								if last_message_id_V2!=epicboxmsgid {
-
+								if last_message_id_V2 != epicboxmsgid {
 									last_message_id_V2 = epicboxmsgid.clone();
 
 									let (slate, mut tx_proof) = match TxProof::from_response(
@@ -823,33 +841,29 @@ impl EpicboxBroker {
 										&slate,
 										Some(&mut tx_proof),
 									);
+								}
 
-							   }
-
-
-								client.made_send(epicboxmsgid).map_err(|_| {
+								client
+									.made_send(epicboxmsgid)
+									.map_err(|_| {
 										error!("Error attempting to made_send!");
 									})
 									.unwrap();
+								//std::thread::sleep(durationV2);
 							}
 							ProtocolResponseV2::GetVersion { str } => {
-
-								
-                                    error!("ProtocolResponse {}", str);
-									/*ver = "2.0.0";
-									justsendgetversion = false;
-									client
-										.sendV2(&repeatrequestV2)
-										.expect("Could not send Subscribe request!");*/
-
-								
+								error!("ProtocolResponse {}", str);
+								/*ver = "2.0.0";
+								justsendgetversion = false;
+								client
+									.sendV2(&repeatrequestV2)
+									.expect("Could not send Subscribe request!");*/
 							}
 							ProtocolResponseV2::Error {
 								kind: _,
 								description: _,
 							} => {
 								error!("ProtocolResponse::Error {}", response);
-							    
 							}
 							_ => {}
 						}
@@ -866,11 +880,8 @@ impl EpicboxBroker {
 					}
 				},
 			};
-		  
 
-		  	
-
-		  if new_challenge {
+			if new_challenge {
 				client
 					.new_challenge()
 					.map_err(|_| error!("error attempting challenge!"))
@@ -882,7 +893,7 @@ impl EpicboxBroker {
 				//	std::thread::sleep(duration);
 				//	first_run = false;
 				//}
-		  }
+			}
 		}; //end loop
 
 		res
@@ -970,13 +981,10 @@ where
 	}
 
 	fn made_send(&self, epicboxmsgid: String) -> Result<(), Error> {
-
-        let chell  = match &self.challenge {
-            None =>  String::from(""),
-	        Some(c) => {
-	            c.to_string()
-	        }
-        };
+		let chell = match &self.challenge {
+			None => String::from(""),
+			Some(c) => c.to_string(),
+		};
 
 		let signature = sign_challenge(&chell, &self.secret_key)?.to_hex();
 		//let request = ProtocolRequest1::Made;
@@ -990,7 +998,7 @@ where
 			address: self.address.public_key.to_string(),
 			signature,
 			epicboxmsgid,
-			ver:"2.0.0".to_string()
+			ver: "2.0.0".to_string(),
 		};
 
 		self.sendV2(&request)
